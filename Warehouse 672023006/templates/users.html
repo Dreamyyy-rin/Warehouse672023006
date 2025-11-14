@@ -1,0 +1,193 @@
+<!-- templates/users.html -->
+<!DOCTYPE html>
+<html>
+<head>
+  <title>User Management</title>
+  <script src="https://cdn.webix.com/edge/webix.js"></script>
+  <link rel="stylesheet" href="https://cdn.webix.com/edge/webix.css">
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+<script>
+async function setupMenuVisibility() {
+    try {
+        const response = await fetch("/api/user/info");
+        const userInfo = await response.json();
+        
+        // Update user info display
+        const userInfoElement = document.getElementById("user-info");
+        if (userInfoElement) {
+            userInfoElement.innerText = 
+                `${userInfo.username} (${userInfo.role.charAt(0).toUpperCase() + userInfo.role.slice(1)})`;
+        }
+
+        // Menu permissions
+        const menuPermissions = {
+            'admin': ['dashboard', 'items', 'transactions', 'suppliers', 'categories', 'destinations', 'users'],
+            'manager': ['dashboard', 'items', 'transactions', 'suppliers', 'categories', 'destinations'],
+            'staff': ['dashboard', 'transactions']
+        };
+
+        const allowedMenus = menuPermissions[userInfo.role.toLowerCase()] || [];
+
+        // Hide unauthorized menus
+        document.querySelectorAll('.sidebar a').forEach(link => {
+            const href = link.getAttribute('href');
+            const menuName = href.replace('/', '');
+            if (!allowedMenus.includes(menuName)) {
+                link.style.display = 'none';
+            }
+        });
+    } catch (err) {
+        console.error("Failed to load user info:", err);
+        // Only redirect if truly unauthorized
+        if (err.status === 401) {
+            window.location.href = '/login';
+        }
+    }
+}
+
+// Call when DOM loaded
+document.addEventListener('DOMContentLoaded', setupMenuVisibility);
+</script>
+
+<div style="display:flex; height:100vh;">
+  <div class="sidebar">
+    <h2>📦 Warehouse</h2>
+    <a href="/dashboard" id="menu-dashboard">🏠 Dashboard</a>
+    <a href="/items" id="menu-items">📋 Items</a>
+    <a href="/transactions" id="menu-transactions">💰 Transactions</a>
+    <a href="/suppliers" id="menu-suppliers">🏢 Suppliers</a>
+    <a href="/categories" id="menu-categories">🗂️ Categories</a>
+    <a href="/destinations" id="menu-destinations">📦 Destinations</a>
+    <a href="/users" id="menu-users" class="active">👥 Users</a>
+    <div style="margin-top:auto; padding:20px;">
+      <form action="/logout" method="post">
+        <button type="submit">Logout</button>
+      </form>
+    </div>
+  </div>
+
+  <div style="flex:1;">
+    <div class="topbar">
+      <div><b>User Management</b></div>
+      <div id="user-info">Guest (-)</div>
+    </div>
+
+    <div class="action-buttons">
+      <button class="webix_button" id="addUserBtn">➕ Add User</button>
+    </div>
+
+    <div id="usersTable"></div>
+  </div>
+</div>
+
+<script>
+function formatIDR(value) {
+  return "Rp " + Number(value).toLocaleString("id-ID");
+}
+
+function escapeHtml(unsafe) {
+    return unsafe
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#039;");
+}
+
+let userTable = webix.ui({
+  container: "usersTable",
+  view: "datatable",
+  columns: [
+    { id: "username", header: ["Username", {content:"textFilter"}], fillspace: 2, sort: "string" },
+    { id: "role", header: ["Role", {content:"selectFilter"}], width: 150,
+      template: (obj) => obj.role.charAt(0).toUpperCase() + obj.role.slice(1) },
+    { id: "created_at", header: ["Created", {content:"textFilter"}], width: 200 },
+    { 
+      id: "actions", 
+      header: "Actions",
+      width: 150,
+      template: function(obj) {
+        if(obj.username !== "admin") {
+          return "<span class='edit-btn'>Edit</span> <span class='delete-btn'>Delete</span>";
+        }
+        return "";
+      }
+    }
+  ],
+  select: true,
+  height: 500,
+  scroll: true,
+  url: "/api/users"
+});
+
+let userForm = webix.ui({
+  view: "window",
+  id: "userFormWin", 
+  width: 400,
+  position: "center",
+  modal: true,
+  head: "Add User",
+  body: {
+    view: "form",
+    id: "userForm",
+    elements: [
+      { view: "text", label: "Username", name: "username", required: true },
+      { view: "text", type: "password", label: "Password", name: "password", required: true },
+      { 
+        view: "select", 
+        label: "Role",
+        name: "role",
+        options: [
+          {id: "admin", value: "Admin"},
+          {id: "manager", value: "Manager"},
+          {id: "staff", value: "Staff"}
+        ],
+        required: true
+      },
+      {
+        margin: 5,
+        cols: [
+          {
+            view: "button",
+            value: "Save",
+            css: "webix_primary",
+            click: function() {
+              if ($$("userForm").validate()) {
+                let values = $$("userForm").getValues();
+                fetch("/api/users", {
+                  method: "POST",
+                  headers: {"Content-Type": "application/json"},
+                  body: JSON.stringify(values)
+                })
+                .then(r => r.json())
+                .then(d => {
+                  webix.message(d.message);
+                  $$("userFormWin").hide();
+                  userTable.clearAll();
+                  userTable.load("/api/users");
+                });
+              }
+            }
+          },
+          {
+            view: "button", 
+            value: "Cancel",
+            click: function() {
+              $$("userFormWin").hide();
+            }
+          }
+        ]
+      }
+    ]
+  }
+});
+
+document.getElementById("addUserBtn").addEventListener("click", () => {
+  $$("userForm").clear();
+  $$("userFormWin").show();
+});
+</script>
+</body>
+</html>

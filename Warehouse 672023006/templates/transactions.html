@@ -1,0 +1,440 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Transactions</title>
+  <link rel="shortcut icon" href="{{ url_for('static', filename='favicon.ico') }}">
+  <script src="https://cdn.webix.com/edge/webix.js"></script>
+  <link rel="stylesheet" href="https://cdn.webix.com/edge/webix.css">
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+<div style="display:flex; height:100vh;">
+  <div class="sidebar">
+    <h2 style="padding:20px;">📦 Warehouse</h2>
+    <a href="/dashboard" id="menu-dashboard">🏠 Dashboard</a>
+    <a href="/items" id="menu-items">📋 Items</a>
+    <a href="/transactions" id="menu-transactions" class="active">💰 Transactions</a>
+    <a href="/suppliers" id="menu-suppliers">🏢 Suppliers</a>
+    <a href="/categories" id="menu-categories">🗂️ Categories</a>
+    <a href="/destinations" id="menu-destinations">📦 Destinations</a>
+    <a href="/users" id="menu-users" >👥 Users</a>
+    <div style="margin-top:auto; padding:20px;">
+      <form action="/logout" method="post">
+        <button type="submit">Logout</button>
+      </form>
+    </div>
+  </div>
+
+  <div style="flex:1; display:flex; flex-direction:column;">
+    <div class="topbar">
+      <div><b>Transactions</b></div>
+      <div id="user-info">Guest (-)</div>
+    </div>
+
+    <div class="action-buttons">
+      <button class="webix_button" id="barangMasukBtn">📥 Barang Masuk</button>
+      <button class="webix_button" id="barangKeluarBtn">📤 Barang Keluar</button>
+    </div>
+
+    <div id="transactionsTable"></div>
+  </div>
+</div>
+
+<script>
+// safe helpers
+function escapeHtml(unsafe){ return String(unsafe||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#039;"); }
+function formatIDR(v){ return "Rp " + Number(v||0).toLocaleString("id-ID"); }
+
+// user info + menu visibility
+async function setupMenuVisibility(){
+  try{
+    const r = await fetch("/api/user/info");
+    const user = await r.json();
+    const el = document.getElementById("user-info");
+    if(el) el.innerText = `${user.username || "Guest"} (${(user.role||"guest").charAt(0).toUpperCase()+(user.role||"guest").slice(1)})`;
+    const menuPermissions = {
+      admin: ['dashboard','items','transactions','suppliers','categories','destinations','users'],
+      manager: ['dashboard','items','transactions','suppliers','categories','destinations'],
+      staff: ['dashboard','transactions']
+    };
+    const allowed = menuPermissions[(user.role||"guest").toLowerCase()]||[];
+    document.querySelectorAll('.sidebar a').forEach(a=>{
+      const name = a.getAttribute('href').replace('/','');
+      if(!allowed.includes(name)) a.style.display='none';
+    });
+  }catch(e){
+    console.error("Failed to load user info:", e);
+    const el = document.getElementById("user-info");
+    if(el) el.innerText = "Guest (-)";
+  }
+}
+
+function createTransactionsUI(){
+    const containerEl = document.getElementById("transactionsTable");
+    
+    function calcSize() {
+        const width = containerEl.clientWidth;
+        const height = window.innerHeight - 200;
+        return { width, height };
+    }
+    
+    const size = calcSize();
+    
+    if($$("transactionsData")){
+        try{ $$("transactionsData").destructor(); }catch(e){}
+    }
+
+    webix.ui({
+        container: "transactionsTable",
+        view: "datatable",
+        id: "transactionsData",
+        url: "/api/transactions/history",
+        select: "row",
+        scrollX: false,
+        scrollY: true,
+        height: size.height,
+        columns: [
+            { 
+                id: "timestamp", 
+                header: ["Date", {content:"textFilter"}], 
+                width: 180,
+                sort: "string"
+            },
+            { 
+                id: "item_name", 
+                header: ["Item", {content:"textFilter"}], 
+                fillspace: 3,
+                sort: "string"
+            },
+            { 
+                id: "type", 
+                header: ["Type", {content:"selectFilter"}], 
+                width: 100,
+                sort: "string",
+                template: function(obj){
+                    return obj.type === "in" ? "Masuk" : "Keluar";
+                }
+            },
+            { 
+                id: "quantity", 
+                header: ["Qty", {content:"numberFilter"}], 
+                width: 80,
+                sort: "int"
+            },
+            { 
+                id: "cost", 
+                header: ["Cost", {content:"numberFilter"}], 
+                width: 140,
+                sort: "int",
+                template: function(obj){
+                    return formatIDR(obj.cost || obj.transaction_cost || 0);
+                }
+            },
+            { 
+                id: "details_name", 
+                header: ["Supplier/Dest", {content:"textFilter"}], 
+                fillspace: 2,
+                sort: "string"
+            },
+            { 
+                id: "actions", 
+                header: "Actions", 
+                width: 100,
+                template: function(obj){
+                    if((obj.status||"") === "active") {
+                        if(obj.type === "in") {
+                            return "<span class='cancel-btn'>Cancel</span>";
+                        } else {
+                            return "<span class='return-btn'>Return</span>";
+                        }
+                    }
+                    return "<span style='color:#666'>" + escapeHtml(obj.status||"-") + "</span>";
+                }
+            }
+        ],
+        on:{
+            onAfterLoad: function(){
+                this.adjustRowHeight("item_name");
+            },
+            onItemClick: function(id, e, node){
+                if(e.target.classList.contains("cancel-btn")){
+                    let item = this.getItem(id.row);
+                    webix.confirm({
+                        title: "Confirm Cancel",
+                        text: "Are you sure you want to cancel this transaction?",
+                        callback: function(result){
+                            if(result){
+                                fetch(`/api/transactions/cancel/${item._id}`, {
+                                    method: "POST"
+                                })
+                                .then(function(r){ return r.json(); })
+                                .then(function(d){
+                                    webix.message(d.message);
+                                    $$("transactionsData").clearAll();
+                                    $$("transactionsData").load("/api/transactions/history");
+                                })
+                                .catch(function(err){
+                                    webix.message({type:"error", text:"Failed to cancel transaction"});
+                                });
+                            }
+                        }
+                    });
+                }
+                
+                if(e.target.classList.contains("return-btn")){
+                    let item = this.getItem(id.row);
+                    webix.confirm({
+                        title: "Confirm Return",
+                        text: "Are you sure you want to return this transaction?",
+                        callback: function(result){
+                            if(result){
+                                fetch(`/api/transactions/return/${item._id}`, {
+                                    method: "POST"
+                                })
+                                .then(function(r){ return r.json(); })
+                                .then(function(d){
+                                    webix.message(d.message);
+                                    $$("transactionsData").clearAll();
+                                    $$("transactionsData").load("/api/transactions/history");
+                                })
+                                .catch(function(err){
+                                    webix.message({type:"error", text:"Failed to return transaction"});
+                                });
+                            }
+                        }
+                    });
+                }
+            }
+        }
+    });
+
+    window.addEventListener("resize", function(){
+        const newSize = calcSize();
+        const table = $$("transactionsData");
+        if(table){
+            table.config.height = newSize.height;
+            table.resize();
+        }
+    });
+}
+
+document.addEventListener('DOMContentLoaded', function(){
+    setupMenuVisibility();
+    createTransactionsUI();
+
+    document.getElementById("barangMasukBtn").addEventListener("click", ()=>{
+      if($$("barangMasukForm")){ $$("barangMasukForm").clear(); $$("barangMasukForm").setValues({ quantity:1, cost_display: formatIDR(0) }, true); }
+      if($$("barangMasukFormWin")) $$("barangMasukFormWin").show();
+    });
+
+    document.getElementById("barangKeluarBtn").addEventListener("click", () => {
+      $$("barangKeluarForm").clear();
+      $$("barangKeluarForm").setValues({quantity: 1});
+      $$("barangKeluarFormWin").show();
+    });
+  });
+
+  let barangKeluarFormWin = webix.ui({
+    view: "window",
+    id: "barangKeluarFormWin",
+    width: 400,
+    position: "center",
+    modal: true,
+    head: "Barang Keluar",
+    body: {
+      view: "form",
+      id: "barangKeluarForm",
+      elements: [
+        {
+          view: "combo",
+          label: "Item",
+          name: "item_id",
+          required: true,
+          options: {
+            body: {
+              template: "#value#",
+              url: "/api/transactions/search_items"
+            },
+            filter: function(item, value) {
+              return item.value.toString().toLowerCase().indexOf(value.toLowerCase()) !== -1;
+            }
+          }
+        },
+        {
+          view: "counter", // Changed from text to counter
+          label: "Quantity",
+          name: "quantity",
+          id: "bk_qty",
+          value: 1,
+          min: 1,
+          required: true
+        },
+        {
+          view: "combo",
+          label: "Destination",
+          name: "destination_id",
+          required: true,
+          options: {
+            body: {
+              template: "#value#",
+              url: "/api/destinations/active"
+            },
+            filter: function(item, value) {
+              return item.value.toString().toLowerCase().indexOf(value.toLowerCase()) !== -1;
+            }
+          }
+        },
+        {
+          margin: 5,
+          cols: [
+            {
+              view: "button",
+              value: "Save",
+              css: "webix_primary",
+              click: function() {
+                let form = $$("barangKeluarForm");
+                if(form.validate()) {
+                  let values = form.getValues();
+                  fetch("/api/transactions/out", {
+                    method: "POST",
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(values)
+                  })
+                  .then(r => r.json())
+                  .then(d => {
+                    webix.message(d.message);
+                    $$("barangKeluarFormWin").hide();
+                    $$("transactionsData").clearAll();
+                    $$("transactionsData").load("/api/transactions/history");
+                  })
+                  .catch(err => {
+                    console.error("Error:", err);
+                    webix.message({type:"error", text:"Failed to process transaction"});
+                  });
+                }
+              }
+            },
+            {
+              view: "button",
+              value: "Cancel",
+              click: function() {
+                $$("barangKeluarFormWin").hide();
+              }
+            }
+          ]
+        }
+      ]
+    }
+  });
+
+  let barangMasukFormWin = webix.ui({
+    view: "window",
+    id: "barangMasukFormWin",
+    width: 400,
+    position: "center",
+    modal: true,
+    head: "Barang Masuk",
+    body: {
+      view: "form",
+      id: "barangMasukForm",
+      elements: [
+        {
+          view: "combo",
+          label: "Item",
+          name: "item_id",
+          required: true,
+          options: {
+            body: {
+              template: "#value#",
+              url: "/api/transactions/search_items"
+            }
+          },
+          on: {
+            onChange: function(newv) {
+              let list = this.getList();
+              if(!list) return;
+              let sel = list.getItem(newv);
+              if(sel) {
+                let qty = $$("bm_qty").getValue() || 1;
+                let cost = (sel.price || 0) * qty;
+                this.getFormView().setValues({
+                  cost_display: formatIDR(cost)
+                }, true);
+              }
+            }
+          }
+        },
+        {
+          view: "counter",
+          label: "Quantity",
+          name: "quantity",
+          id: "bm_qty",
+          value: 1,
+          min: 1,
+          on: {
+            onChange: function(newv) {
+              let itemId = $$("barangMasukForm").getValues().item_id;
+              let list = $$("barangMasukForm").elements.item_id.getList();
+              if(list && itemId) {
+                let sel = list.getItem(itemId);
+                if(sel) {
+                  let cost = (sel.price || 0) * newv;
+                  $$("barangMasukForm").setValues({
+                    cost_display: formatIDR(cost)
+                  }, true);
+                }
+              }
+            }
+          }
+        },
+        {
+          view: "text",
+          label: "Cost (Rp)",
+          name: "cost_display",
+          readonly: true
+        },
+        {
+          margin: 5,
+          cols: [
+            {
+              view: "button",
+              value: "Save",
+              css: "webix_primary",
+              click: function() {
+                let form = $$("barangMasukForm");
+                if(form.validate()) {
+                  let values = form.getValues();
+                  fetch("/api/transactions/in", {
+                    method: "POST",
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                      item_id: values.item_id,
+                      quantity: values.quantity
+                    })
+                  })
+                  .then(r => r.json())
+                  .then(d => {
+                    webix.message(d.message);
+                    $$("barangMasukFormWin").hide();
+                    $$("transactionsData").clearAll();
+                    $$("transactionsData").load("/api/transactions/history");
+                  });
+                }
+              }
+            },
+            {
+              view: "button",
+              value: "Cancel",
+              click: function() {
+                $$("barangMasukFormWin").hide();
+              }
+            }
+          ]
+        }
+      ]
+    }
+  });
+</script>
+</body>
+</html>

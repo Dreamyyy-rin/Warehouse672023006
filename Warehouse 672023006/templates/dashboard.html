@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Dashboard</title>
+  <script src="https://cdn.webix.com/edge/webix.js"></script>
+  <link rel="stylesheet" href="https://cdn.webix.com/edge/webix.css">
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+
+<div style="display:flex; height:100vh;">
+  <div class="sidebar">
+    <h2>📦 Warehouse</h2>
+    <a href="/dashboard" id="menu-dashboard" class="active">🏠 Dashboard</a>
+    <a href="/items" id="menu-items">📋 Items</a>
+    <a href="/transactions" id="menu-transactions">💰 Transactions</a>
+    <a href="/suppliers" id="menu-suppliers">🏢 Suppliers</a>
+    <a href="/categories" id="menu-categories">🗂️ Categories</a>
+    <a href="/destinations" id="menu-destinations">📦 Destinations</a>
+    <a href="/users" id="menu-users">👥 Users</a>
+    <div style="margin-top:auto; padding:20px;">
+      <form action="/logout" method="post">
+        <button type="submit">Logout</button>
+      </form>
+    </div>
+  </div>
+
+  <div style="flex:1; display:flex; flex-direction:column;">
+    <div class="topbar">
+      <div><b>Dashboard</b></div>
+      <div id="user-info">Guest (-)</div>
+    </div>
+
+    <div class="main-content">
+      <!-- Summary Cards -->
+      <div class="dashboard-summary">
+        <div class="summary-card">
+          <div class="card-icon">📦</div>
+          <div class="card-content">
+            <h3 id="totalItems">0</h3>
+            <p>Total Items</p>
+          </div>
+        </div>
+        <div class="summary-card">
+          <div class="card-icon">⚠️</div>
+          <div class="card-content">
+            <h3 id="lowStock">0</h3>
+            <p>Low Stock Items</p>
+          </div>
+        </div>
+        <div class="summary-card">
+          <div class="card-icon">💰</div>
+          <div class="card-content">
+            <h3 id="todayTrans">0</h3>
+            <p>Today's Transactions</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- Charts -->
+      <div class="dashboard-charts">
+        <!-- Transaction History Chart -->
+        <div class="chart-container">
+          <h3>Transaction History</h3>
+          <div id="transactionChart"></div>
+        </div>
+        <!-- Recent Transactions Table -->
+        <div class="chart-container">
+          <h3>Recent Transactions</h3>
+          <div id="recentTransactions"></div>
+        </div>
+      </div>
+
+      <!-- Tables -->
+      <div class="dashboard-tables">
+        <!-- Low Stock Items Table -->
+        <div class="recent-table">
+          <h3>Low Stock Items</h3>
+          <div id="lowStockTable"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+// Setup Menu Visibility
+async function setupMenuVisibility() {
+    try {
+        const response = await fetch("/api/user/info");
+        const userInfo = await response.json();
+        
+        const userInfoElement = document.getElementById("user-info");
+        if (userInfoElement) {
+            userInfoElement.innerText = 
+                `${userInfo.username} (${userInfo.role.charAt(0).toUpperCase() + userInfo.role.slice(1)})`;
+        }
+
+        const menuPermissions = {
+            'admin': ['dashboard', 'items', 'transactions', 'suppliers', 'categories', 'destinations', 'users'],
+            'manager': ['dashboard', 'items', 'transactions', 'suppliers', 'categories', 'destinations'],
+            'staff': ['dashboard', 'transactions']
+        };
+
+        const allowedMenus = menuPermissions[userInfo.role.toLowerCase()] || [];
+
+        document.querySelectorAll('.sidebar a').forEach(link => {
+            const href = link.getAttribute('href');
+            const menuName = href.replace('/', '');
+            if (!allowedMenus.includes(menuName)) {
+                link.style.display = 'none';
+            }
+        });
+    } catch (err) {
+        console.error("Failed to load user info:", err);
+    }
+}
+
+// Format Currency
+function formatIDR(value) {
+    return "Rp " + Number(value).toLocaleString("id-ID");
+}
+
+// Load Summary Data
+fetch("/api/dashboard/summary")
+    .then(res => res.json())
+    .then(data => {
+        document.getElementById("totalItems").innerText = data.total_items;
+        document.getElementById("lowStock").innerText = data.low_stock;
+        document.getElementById("todayTrans").innerText = data.today_trans;
+    });
+
+// Transaction History Chart
+webix.ui({
+    container: "transactionChart",
+    view: "chart",
+    type: "line",
+    height: 250,
+    value: "#count#",
+    item: {
+        borderColor: "#1CA1C1",
+        color: "#1CA1C1"
+    },
+    line: {
+        color: "#1CA1C1",
+        width: 2
+    },
+    xAxis: {
+        template: "#date#",
+        lines: false
+    },
+    yAxis: {
+        start: 0,
+        step: 1,
+        lines: true
+    },
+    url: "/api/dashboard/chart_data"
+});
+
+// Recent Transactions Table
+let recentTransTable = webix.ui({
+    container: "recentTransactions",
+    view: "datatable",
+    height: 250,
+    columns: [
+        { id: "timestamp", header: "Date", width: 150 },
+        { id: "item_name", header: "Item", fillspace: true },
+        { id: "type", header: "Type", width: 100,
+          template: (obj) => obj.type === "in" ? "Masuk" : "Keluar" },
+        { id: "quantity", header: "Qty", width: 80 },
+        { id: "cost", header: "Cost", width: 120,
+          template: (obj) => formatIDR(obj.cost || 0) }
+    ],
+    url: "/api/transactions/history"
+});
+
+// Low Stock Table
+let lowStockTable = webix.ui({
+    container: "lowStockTable",
+    view: "datatable",
+    height: 250,
+    columns: [
+        { id: "name", header: "Item Name", fillspace: true },
+        { id: "stock", header: "Current Stock", width: 120 },
+        { id: "supplier", header: "Supplier", width: 200 }
+    ],
+    url: "/api/dashboard/low_stock"
+});
+
+// Initialize
+document.addEventListener('DOMContentLoaded', () => {
+    setupMenuVisibility();
+});
+</script>
+
+</body>
+</html>

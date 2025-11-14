@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Destinations</title>
+  <script src="https://cdn.webix.com/edge/webix.js"></script>
+  <link rel="stylesheet" href="https://cdn.webix.com/edge/webix.css">
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+<script>
+async function setupMenuVisibility() {
+    try {
+        const response = await fetch("/api/user/info");
+        const userInfo = await response.json();
+        
+        // Update user info display
+        const userInfoElement = document.getElementById("user-info");
+        if (userInfoElement) {
+            userInfoElement.innerText = 
+                `${userInfo.username} (${userInfo.role.charAt(0).toUpperCase() + userInfo.role.slice(1)})`;
+        }
+
+        // Menu permissions
+        const menuPermissions = {
+            'admin': ['dashboard', 'items', 'transactions', 'suppliers', 'categories', 'destinations', 'users'],
+            'manager': ['dashboard', 'items', 'transactions', 'suppliers', 'categories', 'destinations'],
+            'staff': ['dashboard', 'transactions']
+        };
+
+        const allowedMenus = menuPermissions[userInfo.role.toLowerCase()] || [];
+
+        // Hide unauthorized menus
+        document.querySelectorAll('.sidebar a').forEach(link => {
+            const href = link.getAttribute('href');
+            const menuName = href.replace('/', '');
+            if (!allowedMenus.includes(menuName)) {
+                link.style.display = 'none';
+            }
+        });
+    } catch (err) {
+        console.error("Failed to load user info:", err);
+        // Only redirect if truly unauthorized
+        if (err.status === 401) {
+            window.location.href = '/login';
+        }
+    }
+}
+
+// Call when DOM loaded
+document.addEventListener('DOMContentLoaded', setupMenuVisibility);
+</script>
+
+<div style="display:flex; height:100vh;">
+  <div class="sidebar">
+    <h2>📦 Warehouse</h2>
+    <a href="/dashboard" id="menu-dashboard">🏠 Dashboard</a>
+    <a href="/items" id="menu-items">📋 Items</a>
+    <a href="/transactions" id="menu-transactions">💰 Transactions</a>
+    <a href="/suppliers" id="menu-suppliers">🏢 Suppliers</a>
+    <a href="/categories" id="menu-categories">🗂️ Categories</a>
+    <a href="/destinations" id="menu-destinations" class="active">📦 Destinations</a>
+    <a href="/users" id="menu-users">👥 Users</a>
+    <div style="margin-top:auto; padding:20px;">
+      <form action="/logout" method="post">
+        <button type="submit">Logout</button>
+      </form>
+    </div>
+  </div>
+
+  <div style="flex:1; display:flex; flex-direction:column;">
+    <div class="topbar">
+      <div><b>Destinations</b></div>
+      <div id="user-info">Guest (-)</div>
+    </div>
+
+    <div class="action-buttons">
+      <button class="webix_button" id="addDestBtn">➕ Add Destination</button>
+    </div>
+
+    <div id="destinationsTable" style="flex:1;"></div>
+  </div>
+</div>
+
+<script>
+// === User Info ===
+fetch("/api/user/info").then(r=>r.json()).then(d=>{
+  document.getElementById("user-info").innerText = `${d.username} (${d.role})`;
+});
+
+// === Table ===
+let destinationsTable = webix.ui({
+  container:"destinationsTable",
+  view:"datatable",
+  columns:[
+    { id:"name", header:["Name", { content:"textFilter" }], fillspace:2, sort:"string", template: obj => escapeHtml(obj.name) },
+    { id:"contact", header:["Contact", { content:"textFilter" }], width:150, sort:"string", template: obj => escapeHtml(obj.contact) },
+    { id:"address", header:["Address", { content:"textFilter" }], fillspace:3, sort:"string", template: obj => escapeHtml(obj.address) },
+    { 
+      id:"is_active", 
+      header:["Status", { 
+        content:"selectFilter", 
+        options:[
+          { id:"1", value:"Active" },
+          { id:"0", value:"Inactive" }
+        ]
+      }], 
+      width:100, 
+      template: function(obj) {
+        return obj.is_active === 1 || obj.is_active === true || obj.is_active === "1" ? "✅ Active" : "❌ Inactive";
+      }
+    },
+    { id:"action", header:"Action", width:160, template: obj => `
+      <span class='edit-btn'>Edit</span> | <span class='delete-btn'>Delete</span>
+    `}
+  ],
+  url:"/api/destinations",
+  select: true,
+  hover: "row-hover",
+  scrollX: true,
+  autoheight: true,
+  resizeColumn: true,
+  on: {
+    onAfterLoad: function() {
+      this.adjustRowHeight("name", true);
+      this.adjustRowHeight("address", true);
+    }
+  }
+});
+
+// === Form Window ===
+let destFormWin = webix.ui({
+  view:"window", id:"destFormWin", width:400, position:"center", modal:true, head:"Destination Form",
+  body:{
+    view:"form", id:"destForm", elements:[
+      { view:"text", label:"Name", name:"name", required:true },
+      { view:"text", label:"Contact", name:"contact" },
+      { view:"text", label:"Address", name:"address" },
+      { margin:5, cols:[
+        { view:"button", value:"Save", css:"webix_primary", click:function(){
+          let form = $$("destForm");
+          if(form.validate()){
+            let values = form.getValues();
+            let id = form.config.editId;
+            let method = id ? "PUT" : "POST";
+            let url = id ? `/api/destinations/${id}` : "/api/destinations";
+            fetch(url, {
+              method: method,
+              headers: {"Content-Type":"application/json"},
+              body: JSON.stringify(values)
+            }).then(r=>r.json()).then(d=>{
+              webix.message(d.message);
+              $$("destFormWin").hide();
+              destinationsTable.clearAll();
+              destinationsTable.load("/api/destinations");
+            });
+          }
+        }},
+        { view:"button", value:"Cancel", click:function(){ $$("destFormWin").hide(); }}
+      ]}
+    ]
+  }
+});
+
+// === Add Button ===
+document.getElementById("addDestBtn").addEventListener("click", ()=>{
+  $$("destForm").clear();
+  $$("destForm").config.editId = null;
+  $$("destFormWin").show();
+});
+
+// === Edit/Delete Events ===
+destinationsTable.attachEvent("onItemClick", function(id, e){
+  let item = this.getItem(id.row);
+  let target = e.target || e.srcElement;
+  if(target.classList.contains("edit-btn")){
+    $$("destForm").setValues(item);
+    $$("destForm").config.editId = item._id;
+    $$("destFormWin").show();
+  }
+  if(target.classList.contains("delete-btn")){
+    webix.confirm("Delete this destination?").then(()=>{
+      fetch(`/api/destinations/${item._id}`, {method:"DELETE"})
+      .then(r=>r.json()).then(d=>{
+        webix.message(d.message);
+        destinationsTable.clearAll();
+        destinationsTable.load("/api/destinations");
+      });
+    });
+  }
+});
+
+// Add to all templates
+function escapeHtml(unsafe) {
+    return unsafe
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#039;");
+}
+
+// Use in templates
+template: (obj) => escapeHtml(obj.name)
+</script>
+</body>
+</html>

@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Suppliers</title>
+  <script src="https://cdn.webix.com/edge/webix.js"></script>
+  <link rel="stylesheet" href="https://cdn.webix.com/edge/webix.css">
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+<script>
+async function setupMenuVisibility() {
+    try {
+        const response = await fetch("/api/user/info");
+        const userInfo = await response.json();
+        
+        // Update user info display
+        const userInfoElement = document.getElementById("user-info");
+        if (userInfoElement) {
+            userInfoElement.innerText = 
+                `${userInfo.username} (${userInfo.role.charAt(0).toUpperCase() + userInfo.role.slice(1)})`;
+        }
+
+        // Menu permissions
+        const menuPermissions = {
+            'admin': ['dashboard', 'items', 'transactions', 'suppliers', 'categories', 'destinations', 'users'],
+            'manager': ['dashboard', 'items', 'transactions', 'suppliers', 'categories', 'destinations'],
+            'staff': ['dashboard', 'transactions']
+        };
+
+        const allowedMenus = menuPermissions[userInfo.role.toLowerCase()] || [];
+
+        // Hide unauthorized menus
+        document.querySelectorAll('.sidebar a').forEach(link => {
+            const href = link.getAttribute('href');
+            const menuName = href.replace('/', '');
+            if (!allowedMenus.includes(menuName)) {
+                link.style.display = 'none';
+            }
+        });
+    } catch (err) {
+        console.error("Failed to load user info:", err);
+        // Only redirect if truly unauthorized
+        if (err.status === 401) {
+            window.location.href = '/login';
+        }
+    }
+}
+
+// Call when DOM loaded
+document.addEventListener('DOMContentLoaded', setupMenuVisibility);
+</script>
+
+<div style="display:flex; height:100vh;">
+  <div class="sidebar">
+    <h2>📦 Warehouse</h2>
+    <a href="/dashboard" id="menu-dashboard">🏠 Dashboard</a>
+    <a href="/items" id="menu-items">📋 Items</a>
+    <a href="/transactions" id="menu-transactions">💰 Transactions</a>
+    <a href="/suppliers" id="menu-suppliers" class="active">🏢 Suppliers</a>
+    <a href="/categories" id="menu-categories">🗂️ Categories</a>
+    <a href="/destinations" id="menu-destinations">📦 Destinations</a>
+    <a href="/users" id="menu-users">👥 Users</a>
+    <div style="margin-top:auto; padding:20px;">
+      <form action="/logout" method="post">
+        <button type="submit">Logout</button>
+      </form>
+    </div>
+  </div>
+
+  <div style="flex:1; display:flex; flex-direction:column;">
+    <div class="topbar">
+      <div><b>Suppliers</b></div>
+      <div id="user-info">Guest (-)</div>
+    </div>
+
+    <div style="padding:10px; background:#f8f9fa;">
+      <button class="webix_button" id="addSupplierBtn">➕ Add Supplier</button>
+    </div>
+
+    <div id="suppliersTable" style="flex:1;"></div>
+  </div>
+</div>
+
+<script>
+// Add to all templates
+function escapeHtml(unsafe) {
+    return unsafe
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#039;");
+}
+
+fetch("/api/user/info").then(r=>r.json()).then(d=>{
+  document.getElementById("user-info").innerText = `${d.username} (${d.role})`;
+});
+
+// ===== Suppliers Table =====
+let suppliersTable = webix.ui({
+  container:"suppliersTable",
+  view:"datatable",
+  url:"/api/suppliers",
+  columns:[
+    { id:"name", header:["Name", { content:"textFilter" }], fillspace:2, sort:"string", template: obj => escapeHtml(obj.name) },
+    { id:"contact", header:["Contact", { content:"textFilter" }], fillspace:2, sort:"string", template: obj => escapeHtml(obj.contact) },
+    { id:"address", header:["Address", { content:"textFilter" }], fillspace:3, sort:"string", template: obj => escapeHtml(obj.address) },
+    { 
+      id:"is_active",
+      header:["Status", {
+        content: "selectFilter",
+        options: [
+            {id: "1", value: "Active"},
+            {id: "0", value: "Inactive"}
+        ]
+      }],
+      width: 110,
+      sort: "int",
+      template: function(obj) {
+        return Number(obj.is_active) === 1 ? "✅ Active" : "❌ Inactive";
+      }
+    },
+    { id:"action", header:"Action", width:150, template:function(obj){
+        return `<span class='edit-btn'>Edit</span> <span class='delete-btn'>Delete</span>`;
+    }}
+  ],
+  select:"row",
+  scrollX:true,
+  autoheight:false,
+  autowidth:false
+});
+
+// ===== Refresh function =====
+function refreshSuppliers(){
+  webix.ajax().get("/api/suppliers", function(text, data){
+    let sup = data.json();
+    suppliersTable.clearAll();
+    suppliersTable.parse(sup);
+  });
+}
+
+// ===== Supplier Form Modal =====
+let supplierFormWin = webix.ui({
+  view:"window",
+  id:"supplierFormWin",
+  width:400,
+  position:"center",
+  modal:true,
+  head:"Supplier Form",
+  body:{
+    view:"form",
+    id:"supplierForm",
+    elements:[
+      { view:"text", label:"Name", name:"name", required:true },
+      { view:"text", label:"Contact", name:"contact", required:true },
+      { view:"textarea", label:"Address", name:"address" },
+      {
+        margin:5, cols:[
+          { view:"button", value:"Save", css:"webix_primary", click:function(){
+              let form = $$("supplierForm");
+              if(form.validate()){
+                let values = form.getValues();
+                let id = form.config.supplierId;
+                if(id){ // Edit
+                  fetch(`/api/suppliers/${id}`, {
+                    method:"PUT",
+                    headers:{'Content-Type':'application/json'},
+                    body:JSON.stringify(values)
+                  }).then(r=>r.json()).then(d=>{
+                    webix.message(d.message);
+                    $$("supplierFormWin").hide();
+                    refreshSuppliers();
+                  });
+                } else { // Add
+                  values.is_active = true;
+                  fetch("/api/suppliers", {
+                    method:"POST",
+                    headers:{'Content-Type':'application/json'},
+                    body:JSON.stringify(values)
+                  }).then(r=>r.json()).then(d=>{
+                    webix.message(d.message);
+                    $$("supplierFormWin").hide();
+                    refreshSuppliers();
+                  });
+                }
+              }
+          }},
+          { view:"button", value:"Cancel", click:function(){ $$("supplierFormWin").hide(); } }
+        ]
+      }
+    ],
+    rules:{ name:webix.rules.isNotEmpty, contact:webix.rules.isNotEmpty }
+  }
+});
+
+// ===== Event Buttons =====
+document.getElementById("addSupplierBtn").addEventListener("click", ()=>{
+  $$("supplierForm").clear();
+  $$("supplierForm").config.supplierId = null;
+  $$("supplierFormWin").show();
+});
+
+// ===== Table Action Buttons =====
+suppliersTable.attachEvent("onItemClick", function(id, e, node){
+  let item = this.getItem(id.row);
+
+  if(e.target.classList.contains("edit-btn")){
+    $$("supplierForm").setValues(item);
+    $$("supplierForm").config.supplierId = item._id;
+    $$("supplierFormWin").show();
+
+  } else if(e.target.classList.contains("delete-btn")){
+    webix.confirm({
+      title:"Confirm Delete",
+      ok:"Yes", cancel:"No",
+      text:`Delete supplier ${item.name}?`,
+      callback:function(res){
+        if(res){
+          fetch(`/api/suppliers/${item._id}`, { method:"DELETE" })
+          .then(r=>r.json()).then(d=>{
+            webix.message(d.message);
+            refreshSuppliers();
+          });
+        }
+      }
+    });
+  }
+});
+
+// ===== Initial load =====
+refreshSuppliers();
+</script>
+</body>
+</html>
